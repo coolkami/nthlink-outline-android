@@ -27,10 +27,10 @@ class MainActivity : AppCompatActivity() {
     } ?: start()
 
     private fun start() {
-
+        OutlineVpnService.start(this)
     }
 
     private fun stop() {
-
+        OutlineVpnService.stop(this)
     }
 }
