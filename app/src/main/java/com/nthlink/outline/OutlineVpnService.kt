@@ -16,7 +16,7 @@ import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
-class OutlineVpnService : VpnService() {
+class OutlineVpnService : VpnService(), outline.PacketWriter, outline.SocketProtector {
     companion object {
         private const val HOST = "1.2.3.4"
         private const val PORT = 443
@@ -45,12 +45,10 @@ class OutlineVpnService : VpnService() {
 
     private val isRunning = AtomicBoolean(false)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-
+    private val buffer = ByteBuffer.allocate(1501)
     private lateinit var tunFd: ParcelFileDescriptor
     private lateinit var inputStream: FileInputStream
-    private lateinit var packetWriter: PacketWriter
-    private lateinit var socketProtector: SocketProtector
-    private val buffer = ByteBuffer.allocate(1501)
+    private lateinit var outputStream: FileOutputStream
 
     override fun onCreate() {
         Log.i(TAG, "onCreate: ")
@@ -95,20 +93,11 @@ class OutlineVpnService : VpnService() {
         outline.Outline.setNonblock(tunFd.fd.toLong(), false)
 
         inputStream = FileInputStream(tunFd.fileDescriptor)
-
-        val outputStream = FileOutputStream(tunFd.fileDescriptor)
-        packetWriter = PacketWriter(outputStream)
-        socketProtector = SocketProtector(this)
+        outputStream = FileOutputStream(tunFd.fileDescriptor)
 
         try {
-            outline.Outline.start(
-                packetWriter,
-                socketProtector,
-                "$HOST:$PORT",
-                METHOD,
-                PASSWORD,
-                PREFIX
-            )
+            // packetWriter, socketProtector, address, cipher, secret, prefix
+            outline.Outline.start(this, this, "$HOST:$PORT", METHOD, PASSWORD, PREFIX)
         } catch (e: Exception) {
             stop()
             Log.e(TAG, "Start outline failed: ", e)
@@ -116,12 +105,24 @@ class OutlineVpnService : VpnService() {
         }
 
         isRunning.set(true)
-        startForegroundWithNotification()
 
         // Handle IP packet reading in another thread
         handlePackets()
-
+        startForegroundWithNotification()
         Log.i(TAG, "VPN connected !")
+    }
+
+    // Implement the PacketWriter interface in order to write back IP packets.
+    override fun writePacket(pkt: ByteArray?) {
+        try {
+            outputStream.write(pkt)
+        } catch (e: Exception) {
+            Log.e(TAG, "writePacket: failed to write bytes to TUN:", e)
+        }
+    }
+
+    override fun protect(fd: Long): Boolean {
+        return this.protect(fd.toInt())
     }
 
     private fun stop() {
@@ -142,30 +143,13 @@ class OutlineVpnService : VpnService() {
     }
 
     override fun onRevoke() {
-        super.onRevoke()
         Log.i(TAG, "onRevoke: ")
+        stop()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         Log.i(TAG, "onDestroy: ")
-    }
-
-    // Implement the PacketWriter interface in order to write back IP packets.
-    private class PacketWriter(private val stream: FileOutputStream) : outline.PacketWriter {
-        override fun writePacket(pkt: ByteArray?) {
-            try {
-                stream.write(pkt)
-            } catch (e: Exception) {
-                Log.e(TAG, "writePacket: failed to write bytes to TUN:", e)
-            }
-        }
-    }
-
-    private class SocketProtector(private val service: VpnService) : outline.SocketProtector {
-        override fun protect(fd: Long): Boolean {
-            return service.protect(fd.toInt())
-        }
     }
 
     // Read IP packets from TUN FD and feed to outline
@@ -195,6 +179,6 @@ class OutlineVpnService : VpnService() {
         val notification = createNotification(this, clickIntent)
 
         // Move background service to foreground
-        startForeground(Int.MAX_VALUE, notification)
+        startForeground(1, notification)
     }
 }
