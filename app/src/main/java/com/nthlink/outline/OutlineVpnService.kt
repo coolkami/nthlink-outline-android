@@ -136,7 +136,10 @@ class OutlineVpnService : VpnService(), outline.PacketWriter, outline.SocketProt
             Log.e(TAG, "Stop outline failed: ", e)
         }
 
-        tunFd.close()
+        if (this::tunFd.isInitialized) {
+            tunFd.close()
+        }
+
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
         Log.i(TAG, "VPN disconnected !")
